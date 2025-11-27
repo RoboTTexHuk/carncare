@@ -1532,58 +1532,6 @@ class _pirate_help_state extends State<pirate_help> with WidgetsBindingObserver 
   }
 }
 
-class pirate_help_lite extends StatefulWidget {
-  const pirate_help_lite({super.key});
-
-  @override
-  State<pirate_help_lite> createState() => _pirate_help_lite_state();
-}
-
-class _pirate_help_lite_state extends State<pirate_help_lite> {
-  InAppWebViewController? _wvc;
-  bool _ld = true;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1A1A22),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            InAppWebView(
-              initialFile: 'assets/dream.html',
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                supportZoom: false,
-                disableHorizontalScroll: false,
-                disableVerticalScroll: false,
-                transparentBackground: true,
-                mediaPlaybackRequiresUserGesture: false,
-                disableDefaultErrorPage: true,
-                allowsInlineMediaPlayback: true,
-                allowsPictureInPictureMediaPlayback: true,
-                useOnDownloadStart: true,
-                javaScriptCanOpenWindowsAutomatically: true,
-              ),
-              onWebViewCreated: (controller) => _wvc = controller,
-              onLoadStart: (controller, url) => setState(() => _ld = true),
-              onLoadStop: (controller, url) async => setState(() => _ld = false),
-              onLoadError: (controller, url, code, message) => setState(() => _ld = false),
-            ),
-            if (_ld)
-              const Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: true,
-                  child: bouncing_loader(),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ============================================================================
 // Анимированный лоадер "car n care"
 // ============================================================================
