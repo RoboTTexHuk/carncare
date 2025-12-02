@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io' show Platform, HttpHeaders, HttpClient;
 
 import 'package:appsflyer_sdk/appsflyer_sdk.dart' as af_core;
-import 'package:carncare/pushcare.dart';
+import 'package:carncare/pushcare.dart'; // если не используете — удалите
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -16,10 +16,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-
 import 'package:provider/provider.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
-
 import 'package:url_launcher/url_launcher.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz_zone;
@@ -27,11 +25,14 @@ import 'package:timezone/timezone.dart' as tz_zone;
 
 
 // ============================================================================
-// Константы (пиратские флаги)
+// Константы
 // ============================================================================
 const String k_loaded_event_sent_once = "loaded_event_sent_once";
 const String k_ship_stat_endpoint = "https://api.ncarcare.autos/stat";
 const String k_cached_fcm_token = "cached_fcm_token";
+
+const Duration k_savedata_timeout = Duration(seconds: 8);
+const String k_external_fallback_url = "https://www.facebook.com/"; // Фолбэк-URL
 
 // ============================================================================
 // Сервисы/синглтоны
@@ -271,7 +272,6 @@ class _jolly_vestibule_state extends State<jolly_vestibule> {
   final parrot_bridge _parrot = parrot_bridge();
   bool _once = false;
   Timer? _fallback_fuse;
-  bool _cover_mute = false;
 
   @override
   void initState() {
@@ -285,10 +285,6 @@ class _jolly_vestibule_state extends State<jolly_vestibule> {
 
     _parrot.await_feather((sig) => _sail(sig));
     _fallback_fuse = Timer(const Duration(seconds: 8), () => _sail(''));
-
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _cover_mute = true);
-    });
   }
 
   void _sail(String sig) {
@@ -310,13 +306,9 @@ class _jolly_vestibule_state extends State<jolly_vestibule> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1A1A22),
-      body: Stack(
-        children: const [
-          Center(child: bouncing_loader()),
-        ],
-      ),
+    return const Scaffold(
+      backgroundColor: Color(0xFF1A1A22),
+      body: Center(child: bouncing_loader()),
     );
   }
 }
@@ -440,6 +432,48 @@ Future<void> post_harbor_stat({
 }
 
 // ============================================================================
+// Экран внешнего URL (фолбэк)
+// ============================================================================
+class ExternalUrlWebViewPage extends StatefulWidget {
+  final String url;
+
+
+  const ExternalUrlWebViewPage({
+    super.key,
+    required this.url,
+
+  });
+
+  @override
+  State<ExternalUrlWebViewPage> createState() => _ExternalUrlWebViewPageState();
+}
+
+class _ExternalUrlWebViewPageState extends State<ExternalUrlWebViewPage> {
+  InAppWebViewController? _controller;
+  double _progress = 0.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF1A1A22),
+      body: SafeArea(
+        child: InAppWebView(
+          initialUrlRequest: URLRequest(url: WebUri(widget.url)),
+          initialSettings: InAppWebViewSettings(
+            javaScriptEnabled: true,
+            mediaPlaybackRequiresUserGesture: false,
+            allowsInlineMediaPlayback: true,
+            useOnDownloadStart: true,
+          ),
+          onWebViewCreated: (c) => _controller = c,
+          onProgressChanged: (c, p) => setState(() => _progress = p / 100),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
 // Главный WebView
 // ============================================================================
 class captain_harbor extends StatefulWidget {
@@ -473,6 +507,11 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
 
   String _current_url = "";
   var _start_load_ts = 0;
+
+  // Контроль savedata и тайм-аута
+  Timer? _savedataTimer;
+  bool _savedataArrived = false;
+  bool _navigatedFallback = false;
 
   final Set<String> _schemes = {
     'tg',
@@ -521,9 +560,6 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
 
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _cover = false);
-    });
-    Future.delayed(const Duration(seconds: 3), () {
-      if (!mounted) return;
     });
     Future.delayed(const Duration(seconds: 7), () {
       if (!mounted) return;
@@ -598,6 +634,7 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
       if (call.method == "onNotificationTap") {
         final Map<String, dynamic> payload = Map<String, dynamic>.from(call.arguments);
         if (payload["uri"] != null && !payload["uri"].contains("Нет URI")) {
+          if (!mounted) return;
           Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (context) => spirit_captain_deckload(payload["uri"].toString())),
@@ -626,16 +663,16 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
   }
 
   void _sail(String link) async {
-    if (_pier != null) {
+    try {
       await _pier.loadUrl(urlRequest: URLRequest(url: WebUri(link)));
-    }
+    } catch (_) {}
   }
 
   void _reset_to_home() async {
     Future.delayed(const Duration(seconds: 3), () {
-      if (_pier != null) {
+      try {
         _pier.loadUrl(urlRequest: URLRequest(url: WebUri(_home_port)));
-      }
+      } catch (_) {}
     });
   }
 
@@ -697,13 +734,6 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
             (route) => false,
       );
     });
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _bar_tick.cancel();
-    super.dispose();
   }
 
   // ================== URL helpers ==================
@@ -862,6 +892,51 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
 
   String _digits(String s) => s.replaceAll(RegExp(r'[^0-9+]'), '');
 
+  // ===== savedata таймер и обработка (строго по args[0].toString()) =====
+  void _startSavedataTimer() {
+    _cancelSavedataTimer();
+    _savedataArrived = false;
+    _navigatedFallback = false;
+
+    _savedataTimer = Timer(k_savedata_timeout, () {
+      if (!mounted) return;
+      if (!_savedataArrived && !_navigatedFallback) {
+        _goToExternalFallback("https://app.ncarcare.autos");
+      }
+    });
+  }
+
+  void _cancelSavedataTimer() {
+    _savedataTimer?.cancel();
+    _savedataTimer = null;
+  }
+
+  void _markSavedataArrived() {
+    _savedataArrived = true;
+    _cancelSavedataTimer();
+  }
+
+  void _goToExternalFallback(String url) {
+    if (_navigatedFallback || !mounted) return;
+    _navigatedFallback = true;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ExternalUrlWebViewPage(
+          url: url,
+
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _bar_tick.cancel();
+    _cancelSavedataTimer();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     _bind_bell();
@@ -900,19 +975,21 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
                         _bosun ??= bosun_view_model(qm: _qm, capo: _capo);
                         _courier ??= harbor_courier(model: _bosun!, get_web: () => _pier);
 
+                        // JS Handler — решаем по args[0].toString()
                         _pier.addJavaScriptHandler(
                           handlerName: 'onServerResponse',
                           callback: (args) {
                             try {
-                              final saved = args.isNotEmpty &&
-                                  args[0] is Map &&
-                                  args[0]['savedata'].toString() == "false";
-
-                              print("Load True " + args[0].toString());
-                              if (saved) {
-                      ;
+                              final String s = (args.isNotEmpty ? (args[0]?.toString() ?? '') : '').trim();
+                              // Лог
+                              debugPrint("onServerResponse raw: '$s'");
+                              // Если строка непустая — считаем, что "savedata пришла"
+                              if (s.isNotEmpty) {
+                                _markSavedataArrived();
                               }
-                            } catch (_) {}
+                            } catch (e) {
+                              debugPrint("onServerResponse parse error: $e");
+                            }
                             if (args.isEmpty) return null;
                             try {
                               return args.reduce((curr, next) => curr + next);
@@ -923,10 +1000,14 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
                         );
                       },
                       onLoadStart: (c, u) async {
-                        setState(() {
-                          _start_load_ts = DateTime.now().millisecondsSinceEpoch;
-                        });
+                        setState(() => _start_load_ts = DateTime.now().millisecondsSinceEpoch);
                         setState(() => _spin_wheel = true);
+
+                        // Стартуем таймер ожидания savedata только для домашней страницы
+                        if ((u?.toString() ?? '').startsWith(_home_port)) {
+                          _startSavedataTimer();
+                        }
+
                         final v = u;
                         if (v != null) {
                           if (_bare_mail(v)) {
@@ -1134,363 +1215,6 @@ class _captain_harbor_state extends State<captain_harbor> with WidgetsBindingObs
 }
 
 // ============================================================================
-// Отдельный WebView на внешнюю ссылку (из нотификаций)
-// ============================================================================
-class captain_deck extends StatefulWidget with WidgetsBindingObserver {
-  final String sea_lane;
-  const captain_deck(this.sea_lane, {super.key});
-
-  @override
-  State<captain_deck> createState() => _captain_deck_state();
-}
-
-class _captain_deck_state extends State<captain_deck> with WidgetsBindingObserver {
-  late InAppWebViewController _deck;
-
-  final Set<String> _schemes = {
-    'tg',
-    'telegram',
-    'whatsapp',
-    'viber',
-    'skype',
-    'fb-messenger',
-    'sgnl',
-    'tel',
-    'mailto',
-    'bnl',
-    'fb',
-    'instagram',
-    'twitter',
-    'x',
-  };
-
-  final Set<String> _external_harbors = {
-    't.me',
-    'telegram.me',
-    'telegram.dog',
-    'wa.me',
-    'api.whatsapp.com',
-    'chat.whatsapp.com',
-    'm.me',
-    'signal.me',
-    'bnl.com',
-    'www.bnl.com',
-    'x.com',
-    'www.x.com',
-    'twitter.com',
-    'www.twitter.com',
-    'facebook.com',
-    'www.facebook.com',
-    'm.facebook.com',
-    'instagram.com',
-    'www.instagram.com',
-  };
-
-  bool _bare_mail(Uri u) {
-    final s = u.scheme;
-    if (s.isNotEmpty) return false;
-    final raw = u.toString();
-    return raw.contains('@') && !raw.contains(' ');
-  }
-
-  Uri _mailize(Uri u) {
-    final full = u.toString();
-    final parts = full.split('?');
-    final email = parts.first;
-    final qp = parts.length > 1 ? Uri.splitQueryString(parts[1]) : <String, String>{};
-    return Uri(scheme: 'mailto', path: email, queryParameters: qp.isEmpty ? null : qp);
-  }
-
-  bool _platformish(Uri u) {
-    final s = u.scheme.toLowerCase();
-    if (_schemes.contains(s)) return true;
-
-    if (s == 'http' || s == 'https') {
-      final h = u.host.toLowerCase();
-      if (_external_harbors.contains(h)) return true;
-      if (h.endsWith('t.me')) return true;
-      if (h.endsWith('wa.me')) return true;
-      if (h.endsWith('m.me')) return true;
-      if (h.endsWith('signal.me')) return true;
-      if (h.endsWith('x.com')) return true;
-      if (h.endsWith('twitter.com')) return true;
-      if (h.endsWith('facebook.com')) return true;
-      if (h.endsWith('instagram.com')) return true;
-    }
-    return false;
-  }
-
-  Uri _httpize(Uri u) {
-    final s = u.scheme.toLowerCase();
-
-    if (s == 'tg' || s == 'telegram') {
-      final qp = u.queryParameters;
-      final domain = qp['domain'];
-      if (domain != null && domain.isNotEmpty) {
-        return Uri.https('t.me', '/$domain', {if (qp['start'] != null) 'start': qp['start']!});
-      }
-      final path = u.path.isNotEmpty ? u.path : '';
-      return Uri.https('t.me', '/$path', u.queryParameters.isEmpty ? null : u.queryParameters);
-    }
-
-    if ((s == 'http' || s == 'https') && u.host.toLowerCase().endsWith('t.me')) {
-      return u;
-    }
-
-    if (s == 'viber') return u;
-
-    if (s == 'whatsapp') {
-      final qp = u.queryParameters;
-      final phone = qp['phone'];
-      final text = qp['text'];
-      if (phone != null && phone.isNotEmpty) {
-        return Uri.https('wa.me', '/${_digits(phone)}', {if (text != null && text.isNotEmpty) 'text': text});
-      }
-      return Uri.https('wa.me', '/', {if (text != null && text.isNotEmpty) 'text': text});
-    }
-
-    if ((s == 'http' || s == 'https') &&
-        (u.host.toLowerCase().endsWith('wa.me') || u.host.toLowerCase().endsWith('whatsapp.com'))) {
-      return u;
-    }
-
-    if (s == 'skype') return u;
-
-    if (s == 'fb-messenger') {
-      final path = u.pathSegments.isNotEmpty ? u.pathSegments.join('/') : '';
-      final qp = u.queryParameters;
-      final id = qp['id'] ?? qp['user'] ?? path;
-      if (id.isNotEmpty) {
-        return Uri.https('m.me', '/$id', u.queryParameters.isEmpty ? null : u.queryParameters);
-      }
-      return Uri.https('m.me', '/', u.queryParameters.isEmpty ? null : u.queryParameters);
-    }
-
-    if (s == 'sgnl') {
-      final qp = u.queryParameters;
-      final ph = qp['phone'];
-      final un = u.queryParameters['username'];
-      if (ph != null && ph.isNotEmpty) return Uri.https('signal.me', '/#p/${_digits(ph)}');
-      if (un != null && un.isNotEmpty) return Uri.https('signal.me', '/#u/$un');
-      final path = u.pathSegments.join('/');
-      if (path.isNotEmpty) return Uri.https('signal.me', '/$path', u.queryParameters.isEmpty ? null : u.queryParameters);
-      return u;
-    }
-
-    if (s == 'tel') {
-      return Uri.parse('tel:${_digits(u.path)}');
-    }
-
-    if (s == 'mailto') return u;
-
-    if (s == 'bnl') {
-      final new_path = u.path.isNotEmpty ? u.path : '';
-      return Uri.https('bnl.com', '/$new_path', u.queryParameters.isEmpty ? null : u.queryParameters);
-    }
-
-    if ((s == 'http' || s == 'https')) {
-      final host = u.host.toLowerCase();
-      if (host.endsWith('x.com') ||
-          host.endsWith('twitter.com') ||
-          host.endsWith('facebook.com') ||
-          host.startsWith('m.facebook.com') ||
-          host.endsWith('instagram.com')) {
-        return u;
-      }
-    }
-
-    if (s == 'fb' || s == 'instagram' || s == 'twitter' || s == 'x') {
-      return u;
-    }
-
-    return u;
-  }
-
-  Future<bool> _open_mail_web(Uri mailto) async {
-    final u = _gmailize(mailto);
-    return await _open_web(u);
-  }
-
-  Uri _gmailize(Uri m) {
-    final qp = m.queryParameters;
-    final params = <String, String>{
-      'view': 'cm',
-      'fs': '1',
-      if (m.path.isNotEmpty) 'to': m.path,
-      if ((qp['subject'] ?? '').isNotEmpty) 'su': qp['subject']!,
-      if ((qp['body'] ?? '').isNotEmpty) 'body': qp['body']!,
-      if ((qp['cc'] ?? '').isNotEmpty) 'cc': qp['cc']!,
-      if ((qp['bcc'] ?? '').isNotEmpty) 'bcc': qp['bcc']!,
-    };
-    return Uri.https('mail.google.com', '/mail/', params);
-  }
-
-  Future<bool> _open_web(Uri u) async {
-    try {
-      if (await launchUrl(u, mode: LaunchMode.inAppBrowserView)) return true;
-      return await launchUrl(u, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      debugPrint('openInAppBrowser error: $e; url=$u');
-      try {
-        return await launchUrl(u, mode: LaunchMode.externalApplication);
-      } catch (_) {
-        return false;
-      }
-    }
-  }
-
-  String _digits(String s) => s.replaceAll(RegExp(r'[^0-9+]'), '');
-
-  @override
-  Widget build(BuildContext context) {
-    final night = MediaQuery.of(context).platformBrightness == Brightness.dark;
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: night ? SystemUiOverlayStyle.dark : SystemUiOverlayStyle.light,
-      child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A22),
-        body: InAppWebView(
-          initialSettings: InAppWebViewSettings(
-            javaScriptEnabled: true,
-            disableDefaultErrorPage: true,
-            mediaPlaybackRequiresUserGesture: false,
-            allowsInlineMediaPlayback: true,
-            allowsPictureInPictureMediaPlayback: true,
-            useOnDownloadStart: true,
-            javaScriptCanOpenWindowsAutomatically: true,
-            useShouldOverrideUrlLoading: true,
-            supportMultipleWindows: true,
-          ),
-          initialUrlRequest: URLRequest(url: WebUri(widget.sea_lane)),
-          onWebViewCreated: (c) => _deck = c,
-          shouldOverrideUrlLoading: (c, action) async {
-            final uri = action.request.url;
-            if (uri == null) return NavigationActionPolicy.ALLOW;
-
-            if (_bare_mail(uri)) {
-              final mailto = _mailize(uri);
-              await _open_mail_web(mailto);
-              return NavigationActionPolicy.CANCEL;
-            }
-
-            final sch = uri.scheme.toLowerCase();
-
-            if (sch == 'mailto') {
-              await _open_mail_web(uri);
-              return NavigationActionPolicy.CANCEL;
-            }
-
-            if (sch == 'tel') {
-              await launchUrl(uri, mode: LaunchMode.externalApplication);
-              return NavigationActionPolicy.CANCEL;
-            }
-
-            if (_platformish(uri)) {
-              final web = _httpize(uri);
-
-              final host = (web.host.isNotEmpty ? web.host : uri.host).toLowerCase();
-              final is_social = host.endsWith('x.com') ||
-                  host.endsWith('twitter.com') ||
-                  host.endsWith('facebook.com') ||
-                  host.startsWith('m.facebook.com') ||
-                  host.endsWith('instagram.com') ||
-                  host.endsWith('t.me') ||
-                  host.endsWith('telegram.me') ||
-                  host.endsWith('telegram.dog');
-
-              if (is_social) {
-                await _open_web(web.scheme == 'http' || web.scheme == 'https' ? web : uri);
-                return NavigationActionPolicy.CANCEL;
-              }
-
-              if (web.scheme == 'http' || web == uri) {
-                await _open_web(web);
-              } else {
-                try {
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  } else if (web != uri && (web.scheme == 'http' || web.scheme == 'https')) {
-                    await _open_web(web);
-                  }
-                } catch (_) {}
-              }
-              return NavigationActionPolicy.CANCEL;
-            }
-
-            if (sch != 'http' && sch != 'https') {
-              return NavigationActionPolicy.CANCEL;
-            }
-
-            return NavigationActionPolicy.ALLOW;
-          },
-          onCreateWindow: (c, req) async {
-            final uri = req.request.url;
-            if (uri == null) return false;
-
-            if (_bare_mail(uri)) {
-              final mailto = _mailize(uri);
-              await _open_mail_web(mailto);
-              return false;
-            }
-
-            final sch = uri.scheme.toLowerCase();
-
-            if (sch == 'mailto') {
-              await _open_mail_web(uri);
-              return false;
-            }
-
-            if (sch == 'tel') {
-              await launchUrl(uri, mode: LaunchMode.externalApplication);
-              return false;
-            }
-
-            if (_platformish(uri)) {
-              final web = _httpize(uri);
-
-              final host = (web.host.isNotEmpty ? web.host : uri.host).toLowerCase();
-              final is_social = host.endsWith('x.com') ||
-                  host.endsWith('twitter.com') ||
-                  host.endsWith('facebook.com') ||
-                  host.startsWith('m.facebook.com') ||
-                  host.endsWith('instagram.com') ||
-                  host.endsWith('t.me') ||
-                  host.endsWith('telegram.me') ||
-                  host.endsWith('telegram.dog');
-
-              if (is_social) {
-                await _open_web(web.scheme == 'http' || web.scheme == 'https' ? web : uri);
-                return false;
-              }
-
-              if (web.scheme == 'http' || web.scheme == 'https') {
-                await _open_web(web);
-              } else {
-                try {
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  } else if (web != uri && (web.scheme == 'http' || web.scheme == 'https')) {
-                    await _open_web(web);
-                  }
-                } catch (_) {}
-              }
-              return false;
-            }
-
-            if (sch == 'http' || sch == 'https') {
-              c.loadUrl(urlRequest: URLRequest(url: uri));
-            }
-            return false;
-          },
-          onDownloadStartRequest: (c, req) async {
-            await _open_web(req.url);
-          },
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================================
 // Help экраны
 // ============================================================================
 class pirate_help extends StatefulWidget {
@@ -1574,7 +1298,7 @@ class _bouncing_loader_state extends State<bouncing_loader> with SingleTickerPro
   }
 
   Widget _build_letters(BuildContext context) {
-    final style = TextStyle(
+    const style = TextStyle(
       color: Colors.white,
       fontSize: 24,
       fontWeight: FontWeight.w700,
@@ -1633,12 +1357,11 @@ void main() async {
         p_consigliere,
       ],
       child: r.ProviderScope(
-        child: MaterialApp(
+        child: const MaterialApp(
           debugShowCheckedModeBanner: false,
-          home: const jolly_vestibule(),
+          home: jolly_vestibule(),
         ),
       ),
     ),
   );
 }
-
